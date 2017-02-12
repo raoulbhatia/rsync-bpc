@@ -1,0 +1,5 @@
+build-stamp
+debian/buildtree/
+debian/files
+debian/substvars
+debian/tmp/
