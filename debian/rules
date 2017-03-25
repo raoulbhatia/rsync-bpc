@@ -69,7 +69,7 @@ build-stamp:
 	@echo applying misc Debian patches
 	for i in debian/patches/*.patch debian/patches/*.diff; do if [ -s $$i ]; then echo "  $$i ..."; cat $$i | (cd debian/buildtree; patch -p1) || exit 1; fi; done
 	@echo configuring
-	(cd debian/buildtree; ./configure --prefix=/usr --mandir='$${prefix}/share/man' --build=$(DEB_BUILD_GNU_TYPE) --host=$(DEB_HOST_GNU_TYPE) LDFLAGS="$(LDFLAGS)")
+	(cd debian/buildtree; ./configure --prefix=/usr --mandir='$${prefix}/share/man' --build=$(DEB_BUILD_GNU_TYPE) --host=$(DEB_HOST_GNU_TYPE) LDFLAGS="$(LDFLAGS)"; make reconfigure)
 	@echo building
 	$(MAKE) --directory=debian/buildtree CFLAGS="$(CFLAGS)" CPPFLAGS="$(CPPFLAGS)" LDFLAGS="$(LDFLAGS)" all
 	touch build-stamp
