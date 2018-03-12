@@ -6,7 +6,7 @@ Standards-Version: 3.9.6
 Build-Depends: debhelper (>= 9), autoconf, zlib1g-dev, libpopt-dev, libacl1-dev, libattr1-dev
 
 Package: rsync-bpc
-Architecture: amd64
+Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Description: high-performance, enterprise-grade system for backing up PCs
  BackupPC is disk based and not tape based. This particularity allows
