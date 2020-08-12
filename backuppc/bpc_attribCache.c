@@ -37,8 +37,8 @@ void bpc_attribCache_init(bpc_attribCache_info *ac, char *hostName, int backupNu
     ac->shareNameUM[BPC_MAXPATHLEN - 1] = '\0';
     bpc_fileNameEltMangle(ac->shareName, BPC_MAXPATHLEN, ac->shareNameUM);
     ac->shareNameLen = strlen(ac->shareName);
-    snprintf(ac->hostDir, BPC_MAXPATHLEN, "%s/pc/%s", BPC_TopDir, ac->hostName);
-    snprintf(ac->backupTopDir, BPC_MAXPATHLEN, "%s/pc/%s/%d", BPC_TopDir, ac->hostName, ac->backupNum);
+    snprintf(ac->hostDir, BPC_MAXPATHLEN, "%s/pc/%s", BPC_TopDir, hostName);
+    snprintf(ac->backupTopDir, BPC_MAXPATHLEN, "%s/pc/%s/%d", BPC_TopDir, hostName, ac->backupNum);
     bpc_path_create(ac->backupTopDir);
 
     bpc_hashtable_create(&ac->attrHT,  BPC_ATTRIBCACHE_DIR_HT_SIZE, sizeof(bpc_attribCache_dir));
@@ -99,7 +99,7 @@ void bpc_attribCache_setCurrentDirectory(bpc_attribCache_info *ac, char *dir)
 static void splitPath(bpc_attribCache_info *ac, char *dir, char *fileName, char *attribPath, char *path)
 {
     char *dirOrig = dir;
-    char fullPath[BPC_MAXPATHLEN];
+    char fullPath[2*BPC_MAXPATHLEN];
     size_t pathLen;
 
     /*
@@ -114,7 +114,7 @@ static void splitPath(bpc_attribCache_info *ac, char *dir, char *fileName, char 
      * if this is a relative path, prepend ac->currentDir (provided ac->currentDir is set)
      */
     if ( path[0] != '/' && ac->currentDir[0] ) {
-        snprintf(fullPath, BPC_MAXPATHLEN, "%s/%s", ac->currentDir, path);
+        snprintf(fullPath, sizeof(fullPath), "%s/%s", ac->currentDir, path);
         path = fullPath;
     }
 
@@ -218,7 +218,7 @@ static bpc_attribCache_dir *bpc_attribCache_loadPath(bpc_attribCache_info *ac, c
 
     if ( ac->bkupMergeCnt > 0 ) {
         int i;
-        char topDir[BPC_MAXPATHLEN], fullAttribPath[BPC_MAXPATHLEN];
+        char topDir[2*BPC_MAXPATHLEN], fullAttribPath[2*BPC_MAXPATHLEN];
 
         /*
          * Merge multiple attrib files to create the "view" for this backup.
@@ -228,58 +228,61 @@ static bpc_attribCache_dir *bpc_attribCache_loadPath(bpc_attribCache_info *ac, c
         for ( i = 0 ; i < ac->bkupMergeCnt ; i++ ) {
             bpc_attrib_dir dir;
             ssize_t entrySize;
-            char *entries, *fileName;
-            int attribFileExists, attribDirExists = 1;
-            STRUCT_STAT st;
+            char *entries, *entry;
 
             snprintf(topDir, sizeof(topDir), "%s/pc/%s/%d", BPC_TopDir, ac->hostName, ac->bkupMergeList[i].num);
             snprintf(fullAttribPath, sizeof(fullAttribPath), "%s/%s", topDir, attribPath);
 
-            attribFileExists = !stat(fullAttribPath, &st) && S_ISREG(st.st_mode);
-
-            if ( !attribFileExists ) {
-                char *p;
-                if ( (p = strrchr(fullAttribPath, '/')) ) {
-                    *p = '\0';
-                    attribDirExists = !stat(fullAttribPath, &st) && S_ISDIR(st.st_mode);
-                }
-            }
-            if ( BPC_LogLevel >= 9 ) bpc_logMsgf("bpc_attribCache_loadPath: path = %s, file exists = %d, dir exists = %d\n", fullAttribPath, attribFileExists, attribDirExists);
-
-            if ( ac->bkupMergeList[i].version < 4 && i == ac->bkupMergeCnt - 1 && !attribFileExists && !attribDirExists ) {
-                /*
-                 * For V3, if the last backup doesn't have a directory, then the merged view is empty
-                 */
-                bpc_attrib_dirDestroy(&attr->dir);
-                bpc_attrib_dirInit(&attr->dir, ac->compress);
-                break;
-            }
-            if ( (ac->bkupMergeList[i].version < 4 && !attribFileExists) || !attribDirExists ) {
-                /*
-                 * nothing to update here - keep going
-                 */
-                continue;
-            }
             bpc_attrib_dirInit(&dir, ac->bkupMergeList[i].compress);
             if ( (status = bpc_attrib_dirRead(&dir, topDir, attribPath, ac->bkupMergeList[i].num)) ) {
+                if ( ac->bkupMergeList[i].version < 4 ) {
+                    char *p;
+                    int attribDirExists = 1;
+                    STRUCT_STAT st;
+
+                    if ( (p = strrchr(fullAttribPath, '/')) ) {
+                        *p = '\0';
+                        attribDirExists = !stat(fullAttribPath, &st) && S_ISDIR(st.st_mode);
+                        *p = '/';
+                    }
+                    if ( i == ac->bkupMergeCnt - 1 && !attribDirExists ) {
+                        /*
+                         * For V3, if the last backup doesn't have a directory, then the merged view is empty
+                         */
+                        bpc_attrib_dirDestroy(&dir);
+                        bpc_attrib_dirDestroy(&attr->dir);
+                        bpc_attrib_dirInit(&attr->dir, ac->compress);
+                        break;
+                    }
+                    if ( !attribDirExists ) {
+                        /*
+                         * nothing to update here - keep going
+                         */
+                        bpc_attrib_dirDestroy(&dir);
+                        continue;
+                    }
+                }
                 bpc_logErrf("bpc_attribCache_loadPath: bpc_attrib_dirRead(%s/%s) returned %d\n", topDir, attribPath, status);
             }
+            if ( bpc_attrib_dirNeedRewrite(&dir) ) {
+                attr->dirty = 1;
+            }
             entrySize = bpc_attrib_getEntries(&dir, NULL, 0);
-            if ( (entries = malloc(entrySize)) && bpc_attrib_getEntries(&dir, entries, entrySize) == entrySize ) {
-                for ( fileName = entries ; fileName < entries + entrySize ; fileName += strlen(fileName) + 1 ) {
-                    bpc_attrib_file *file = bpc_attrib_fileGet(&dir, fileName, 0);
+            if ( (entries = malloc(entrySize + 1)) && bpc_attrib_getEntries(&dir, entries, entrySize) == entrySize ) {
+                for ( entry = entries ; entry < entries + entrySize ; entry += strlen(entry) + 1 ) {
+                    bpc_attrib_file *file = bpc_attrib_fileGet(&dir, entry, 0);
                     if ( !file ) continue;
                     if ( file->type == BPC_FTYPE_DELETED ) {
-                        bpc_attrib_fileDeleteName(&attr->dir, fileName);
+                        bpc_attrib_fileDeleteName(&attr->dir, entry);
                     } else {
                         bpc_attrib_file *fileDest;
 
-                        if ( !(fileDest = bpc_attrib_fileGet(&attr->dir, fileName, 1)) ) return NULL;
-                        if ( fileDest->key.key == fileName ) {
+                        if ( !(fileDest = bpc_attrib_fileGet(&attr->dir, entry, 1)) ) return NULL;
+                        if ( fileDest->key.key == entry ) {
                             /*
                              * new entry - initialize
                              */
-                            bpc_attrib_fileInit(fileDest, fileName, 0);
+                            bpc_attrib_fileInit(fileDest, entry, 0);
                         }
                         bpc_attrib_fileCopy(fileDest, file);
                         fileDest->backupNum = ac->bkupMergeList[i].num;
@@ -302,10 +305,16 @@ static bpc_attribCache_dir *bpc_attribCache_loadPath(bpc_attribCache_info *ac, c
         if ( (status = bpc_attrib_dirRead(&attr->dir, ac->backupTopDir, attribPath, ac->backupNum)) ) {
             bpc_logErrf("bpc_attribCache_loadPath: bpc_attrib_dirRead(%s, %s) returned %d\n", ac->backupTopDir, attribPath, status);
         }
+        if ( bpc_attrib_dirNeedRewrite(&attr->dir) ) {
+            attr->dirty = 1;
+        }
         /*
          * remove any extraneous BPC_FTYPE_DELETED file types
          */
 	bpc_hashtable_iterate(&attr->dir.filesHT, (void*)bpc_attribCache_removeDeletedEntries, attr);
+    }
+    if ( attr->dirty ) {
+        if ( BPC_LogLevel >= 8 ) bpc_logMsgf("bpc_attribCache_loadPath: will rewrite path = %s -> dir = %s, fileName = %s, attribPath = %s\n", path, dir, fileName, attribPath);
     }
     if ( bpc_hashtable_entryCount(&ac->attrHT) > BPC_ATTRIBCACHE_DIR_COUNT_MAX ) {
         bpc_attribCache_flush(ac, 0, NULL);
@@ -343,7 +352,7 @@ static bpc_attribCache_dir *bpc_attribCache_loadInode(bpc_attribCache_info *ac, 
     attr->lruCnt = ac->cacheLruCnt++;
     if ( ac->bkupMergeCnt > 0 ) {
         int i;
-        char inodeDir[BPC_MAXPATHLEN], fullAttribPath[BPC_MAXPATHLEN];
+        char inodeDir[2*BPC_MAXPATHLEN], fullAttribPath[2*BPC_MAXPATHLEN];
 
         /*
          * Merge multiple attrib files to create the "view" for this backup.
@@ -352,45 +361,43 @@ static bpc_attribCache_dir *bpc_attribCache_loadInode(bpc_attribCache_info *ac, 
         for ( i = 0 ; i < ac->bkupMergeCnt ; i++ ) {
             bpc_attrib_dir dir;
             ssize_t entrySize;
-            char *entries, *fileName;
-            int attribFileExists, attribDirExists = 1;
-            STRUCT_STAT st;
+            char *entries, *entry;
 
             snprintf(inodeDir, sizeof(inodeDir), "%s/pc/%s/%d/%s", BPC_TopDir, ac->hostName, ac->bkupMergeList[i].num, attribDir);
             snprintf(fullAttribPath, sizeof(fullAttribPath), "%s/%s", inodeDir, attribFile);
 
-            attribFileExists = !stat(fullAttribPath, &st) && S_ISREG(st.st_mode);
-            if ( !attribFileExists ) {
-                attribDirExists = !stat(inodeDir, &st) && S_ISDIR(st.st_mode);
-            }
-            if ( BPC_LogLevel >= 9 ) bpc_logMsgf("bpc_attribCache_loadInode: path = %s, file exists = %d, dir exists = %d\n", fullAttribPath, attribFileExists, attribDirExists);
-
-            if ( (ac->bkupMergeList[i].version < 4 && !attribFileExists) || !attribDirExists ) {
-                /*
-                 * nothing to update here - keep going
-                 */
-                continue;
-            }
             bpc_attrib_dirInit(&dir, ac->bkupMergeList[i].compress);
             if ( (status = bpc_attrib_dirRead(&dir, inodeDir, attribFile, ac->bkupMergeList[i].num)) ) {
+                STRUCT_STAT st;
+                int attribDirExists = !stat(inodeDir, &st) && S_ISDIR(st.st_mode);
+                if ( ac->bkupMergeList[i].version < 4 || !attribDirExists ) {
+                     /*
+                      * nothing to update here - keep going
+                      */
+                     bpc_attrib_dirDestroy(&dir);
+                     continue;
+                }
                 bpc_logErrf("bpc_attribCache_loadInode: bpc_attrib_dirRead(%s/%s) returned %d\n", inodeDir, attribFile, status);
             }
+            if ( bpc_attrib_dirNeedRewrite(&dir) ) {
+                attr->dirty = 1;
+            }
             entrySize = bpc_attrib_getEntries(&dir, NULL, 0);
-            if ( (entries = malloc(entrySize)) && bpc_attrib_getEntries(&dir, entries, entrySize) == entrySize ) {
-                for ( fileName = entries ; fileName < entries + entrySize ; fileName += strlen(fileName) + 1 ) {
-                    bpc_attrib_file *file = bpc_attrib_fileGet(&dir, fileName, 0);
+            if ( (entries = malloc(entrySize + 1)) && bpc_attrib_getEntries(&dir, entries, entrySize) == entrySize ) {
+                for ( entry = entries ; entry < entries + entrySize ; entry += strlen(entry) + 1 ) {
+                    bpc_attrib_file *file = bpc_attrib_fileGet(&dir, entry, 0);
                     if ( !file ) continue;
                     if ( file->type == BPC_FTYPE_DELETED ) {
-                        bpc_attrib_fileDeleteName(&attr->dir, fileName);
+                        bpc_attrib_fileDeleteName(&attr->dir, entry);
                     } else {
                         bpc_attrib_file *fileDest;
 
-                        if ( !(fileDest = bpc_attrib_fileGet(&attr->dir, fileName, 1)) ) return NULL;
-                        if ( fileDest->key.key == fileName ) {
+                        if ( !(fileDest = bpc_attrib_fileGet(&attr->dir, entry, 1)) ) return NULL;
+                        if ( fileDest->key.key == entry ) {
                             /*
                              * new entry - initialize
                              */
-                            bpc_attrib_fileInit(fileDest, fileName, 0);
+                            bpc_attrib_fileInit(fileDest, entry, 0);
                         }
                         bpc_attrib_fileCopy(fileDest, file);
                     }
@@ -409,12 +416,18 @@ static bpc_attribCache_dir *bpc_attribCache_loadInode(bpc_attribCache_info *ac, 
         /*
          * non-merge case - read the single attrib file
          */
-        char inodeDir[BPC_MAXPATHLEN];
+        char inodeDir[2*BPC_MAXPATHLEN];
         snprintf(inodeDir, sizeof(inodeDir), "%s/%s", ac->backupTopDir, attribDir);
 
         if ( (status = bpc_attrib_dirRead(&attr->dir, inodeDir, attribFile, ac->backupNum)) ) {
             bpc_logErrf("bpc_attribCache_loadInode: bpc_attrib_dirRead(%s/%s) returned %d\n", inodeDir, attribFile, status);
         }
+        if ( bpc_attrib_dirNeedRewrite(&attr->dir) ) {
+            attr->dirty = 1;
+        }
+    }
+    if ( attr->dirty ) {
+        if ( BPC_LogLevel >= 8 ) bpc_logMsgf("bpc_attribCache_loadInode: will rewrite path = %s -> dir = %s, fileName = %s\n", attribPath, attribDir, attribFile);
     }
     if ( bpc_hashtable_entryCount(&ac->inodeHT) > BPC_ATTRIBCACHE_DIR_COUNT_MAX ) {
         bpc_attribCache_flush(ac, 0, NULL);
@@ -601,7 +614,7 @@ static void bpc_attribCache_getDirEntry(bpc_attrib_file *file, dirEntry_info *in
 ssize_t bpc_attribCache_getDirEntries(bpc_attribCache_info *ac, char *path, char *entries, ssize_t entrySize)
 {
     bpc_attribCache_dir *attr;
-    char fileName[BPC_MAXPATHLEN], fullPath[BPC_MAXPATHLEN];
+    char fileName[BPC_MAXPATHLEN], fullPath[2*BPC_MAXPATHLEN];
     dirEntry_info info;
     size_t pathLen = strlen(path);
     ino_t inode = 0;
@@ -612,7 +625,7 @@ ssize_t bpc_attribCache_getDirEntries(bpc_attribCache_info *ac, char *path, char
     if ( pathLen >= BPC_MAXPATHLEN - 3 ) return -1;
     if ( pathLen == 1 && path[0] == '.' ) {
         if ( ac->currentDir[0] ) {
-            snprintf(fullPath, BPC_MAXPATHLEN, "%s/x", ac->currentDir);
+            snprintf(fullPath, sizeof(fullPath), "%s/x", ac->currentDir);
         } else {
             strcpy(fullPath, "/x");
         }
