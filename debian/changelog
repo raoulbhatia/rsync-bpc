@@ -1,8 +1,14 @@
+rsync-bpc (3.0.9.15) stable; urgency=medium
+
+  * Import new upstream version 3.0.9.15.
+
+ -- Raoul Bhatia <raoul@bhatia.at>  Wed, 12 Aug 2020 11:53:09 +0200
+
 rsync-bpc (3.0.9.14) stable; urgency=medium
 
   * Import new upstream version 3.0.9.14.
 
- -- raoul <raoul@bhatia.at>  Tue, 16 Jul 2019 14:08:50 +0200
+ -- Raoul Bhatia <raoul@bhatia.at>  Tue, 16 Jul 2019 14:08:50 +0200
 
 rsync-bpc (3.0.9.13) stable; urgency=medium
 
